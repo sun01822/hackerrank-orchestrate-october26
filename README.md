@@ -1,198 +1,169 @@
-# HackerRank Orchestrate - October 2026
+# Ghost Data Still Exists — Deletion-Audit Agent
 
-## Solution: deletion-audit agent
+HackerRank Orchestrate, October 2026. The agent audits whether a customer's personal data was really deleted. The full task is in [`problem_statement.md`](./problem_statement.md).
 
-A hybrid agent: a deterministic evidence pipeline does the investigation and planning, and Claude reads only what code cannot — the request's intent (any language) and the application screenshots.
+For each request in `dataset/deletion_requests.csv` the agent:
 
-### Setup and run
+1. decides whether the person actually asked for deletion;
+2. finds every copy of their data across databases, replicas, logs, exports, search, analytics, backups and documents;
+3. judges the state at `audit_at`, using evidence rather than workflow claims;
+4. writes `COMPLETE`, `INCOMPLETE` or `NOT_APPLICABLE`, with the ordered findings, remediation and verification steps.
 
-Requires Python ≥ 3.10 and `pdftotext` (poppler-utils: `apt install poppler-utils` / `brew install poppler`).
+It is a **hybrid agent**. A deterministic evidence pipeline does the investigation and planning. Claude reads only what code cannot: the intent of the request text (any language) and the admin-console screenshots.
 
-```bash
-python3 -m venv .venv && .venv/bin/pip install -r code/requirements.txt
-echo 'ANTHROPIC_API_KEY=sk-ant-...' > .env          # never committed; read from the environment
-.venv/bin/python code/main.py                        # → ./output.csv (518 rows, validated)
-.venv/bin/python code/evaluation/main.py --write     # sample + custom-case metrics → code/evaluation/evaluation_report.md
-.venv/bin/python -m pytest code/tests -q             # regression tests
-```
+## Results at a glance
 
-Without a key (or with `--offline`) the agent makes no model calls: request intent comes from a built-in multilingual keyword classifier and the screenshots are skipped, so the resources they evidence fall back to activity citations. The submitted `output.csv` was produced this way; `code/evaluation/usage_report.md` records that run (0 calls) and the budget of a live one. With a key, answers are cached in `code/.llm_cache/`; `--refresh-llm` ignores the cache.
-
-### How it works
-
-```
-dataset/ ─► ingest ─► Observation / Coverage ─► link to subject ─► state at audit_at ─► policy ─► ordered plan ─► output.csv
-             │          (per file, per copy)       tier 1: exact identifiers      (latest post-request observation per copy)
-             │                                     tier 2: deletion-worker trail
-             └─ SQL replicas · JSON bundles/exports/ledgers · 6 log layouts (trace-joined) · TXT · PDF (pdftotext) · PNG (Claude vision)
-```
-
-| Module (`code/audit/`) | Responsibility |
+| Measure | Value |
 |---|---|
-| `ingest/` | One parser per evidence family → normalised `Observation` (system, resource, copy, presence, identifier tokens, visible PII, state flags) and `Coverage` (a full collection dump, so absence is provable). Logs are joined on `trace_id` so a lookup key reaches the result line. |
-| `identity.py` | Request email (current or historical) → `user_id` → every email, sha256 email hash, phone and name the person ever had. |
-| `linking.py` | Tier 1: exact identifier matches, scoped to the subject's deletion lifecycle (a person can file several requests). Tier 2: identifier-less resources (404 accounts, anonymised rows) are assigned from the deletion worker's activity trail by a global, exclusive assignment (status↔result agreement, timing, shared evidence files, request-text hints). |
-| `state.py` | Reads only files captured ≤ `audit_at`; a resource violates policy if the latest post-request observation of *any* copy (primary or replica) does. Workflow results are never trusted as proof. |
-| `policy.py` | `deletion_rules.csv` → data category (from the workflow's attempted action, ledger record type, system) → DELETE / REDACT / ANONYMIZE / RETAIN, plus disable-flow and block-restore. |
-| `planner.py` | Findings → remediation → verification, ordered by phase, operation table, `system_id`, `resource_id`; COMPLETE verifications cite the proving evidence. |
-| `intent.py`, `llm/` | Claude Haiku 5.5 classifies all distinct request texts in two batched calls; Claude Sonnet 5.5 transcribes the 11 screenshots. Strict JSON-schema output, thinking off, content-hash cache, usage ledger. Prompts live in `audit/prompts/*.md`. |
+| Sample status accuracy (32 public samples) | **100%** |
+| Step precision / recall / F1 | 98.4% / 97.4% / **97.9%** |
+| Custom scenario cases | 5 / 5 exact |
+| Regression tests | 14 / 14 pass |
+| Full run (518 + 32 requests) | about 1 s, deterministic (byte-identical output) |
+| LLM budget for a live run | about 13 calls, about 65k tokens, about $0.13 |
 
-Evaluation, custom scenarios and token/cost figures: `code/evaluation/evaluation_report.md` and `code/evaluation/usage_report.md`.
+The submitted `output.csv` comes from an **offline run with 0 model calls**, because no API key was available. Details are in [`code/evaluation/usage_report.md`](./code/evaluation/usage_report.md) and [`code/evaluation/evaluation_report.md`](./code/evaluation/evaluation_report.md).
 
----
+## Setup
 
-## Ghost Data Still Exists
+You need:
 
-Build an AI agent that audits whether a user's personal data was actually deleted.
-
-A deletion workflow may report **Complete** while data still exists in databases, logs, support attachments, exports, search indexes, archives, or backups. Sync and restore processes may also bring deleted data back.
-
-For each request, the agent must first determine whether deletion was actually requested. It then returns `COMPLETE`, `INCOMPLETE`, or `NOT_APPLICABLE`, reports any remaining data or recreation risk, and produces the ordered remediation and verification steps required to finish an authorized deletion safely.
-
-Read [`problem_statement.md`](./problem_statement.md) for the complete challenge contract.
-
----
-
-## Quick Start
-
-Clone the repository and move into the project directory:
-
-```bash
-git clone https://github.com/interviewstreet/hackerrank-orchestrate-october26.git
-cd hackerrank-orchestrate-october26
-```
-
-Start your AI coding tool from the **repository root** so it automatically reads [`AGENTS.md`](./AGENTS.md) and logs your session turns to `log.txt` in the root directory.
-
-Build your solution in `code/main.py`, or use another language and document its setup and run command clearly in your README.
-
-Your solution must:
-
-- Read the input files from `dataset/`
-- Generate one prediction row for every request in `dataset/deletion_requests.csv`
-- Write the final predictions to `output.csv` in the repository root
-
-Run the starter Python entry point with:
-
-```bash
-python3 code/main.py
-```
-
-The blank template at `dataset/output.csv` is provided as a reference. Your final generated file for submission must be the root-level `output.csv`.
-
-
-## Dataset
-
-All participant-facing files are in `dataset/`:
-
-| File | Contents |
-| --- | --- |
-| `deletion_requests.csv` | 518 requests |
-| `sample_deletion_requests.csv` | 32 sample requests |
-| `sample_output.csv` | Correct sample answers |
-| `user_identities.csv` | Current user identities |
-| `user_audit_log.csv` | Historical identity changes |
-| `system_activity.csv` | Activity across services and data processes |
-| `deletion_rules.csv` | Required treatment for each data category |
-| `evidence_files.csv` | Manifest of supplied evidence files |
-| `output.csv` | Blank output template |
-
-Evidence is stored under `dataset/evidence/` and may include PDFs, images, logs, JSON, plain text, or SQL snapshot exports. SQL captures may contain a primary database, regional replicas, a reporting replica, or a failover replica so replication drift can be investigated directly. The `.sql` files are readable as text and executable with SQLite.
-
-Only `deletion_requests.csv` requires answers. The other files provide evidence and context.
-
----
-
-## Output
-
-Create `output.csv` with these columns in this exact order:
+- **Python 3.10+**
+- **`pdftotext`** (poppler-utils), for the 4 PDF evidence files:
+  - Debian/Ubuntu: `sudo apt install poppler-utils`
+  - macOS: `brew install poppler`
+  - Windows: install poppler and put `pdftotext` on `PATH`
+- The **challenge dataset** in a `dataset/` folder next to `code/`. The dataset is not part of `code.zip`:
 
 ```text
-case_id,deletion_status,steps_json
+<project root>/
+├── README.md
+├── code/
+└── dataset/          ← deletion_requests.csv, sample_*.csv, evidence/, …
 ```
 
-Produce exactly one row per request. `deletion_status` is `COMPLETE`, `INCOMPLETE`, or `NOT_APPLICABLE`. `steps_json` is an ordered JSON array containing findings, remediation actions, and verification checks. Use an empty array (`[]`) for `NOT_APPLICABLE`. Evidence references may be a `file_id`, `activity_id`, or `audit_id`. Determine the resource state at `audit_at` from the available evidence; reported workflow statuses and operation results are claims. Use `dataset/sample_output.csv` as the format reference.
-
-The final file must contain 518 data rows sorted by `case_id` (plus the header row). The grader parses `steps_json` as JSON, so object-key order and whitespace do not matter; array order does. Order findings, remediation, and verification in that phase order. Within a phase, follow the operation order in the problem statement, then sort by `system_id` and `resource_id`.
-
----
-
-## Evaluation
-
-`output.csv` will be compared with hidden canonical answers. Scoring considers:
-
-- deletion assessment accuracy;
-- current and historical identity resolution;
-- discovery of remaining data and recreation risks;
-- correct policy application and evidence references; and
-- completeness and ordering of remediation and verification steps.
-
-Your `code.zip` must include:
-
-```text
-code/evaluation/evaluation_report.md
-code/evaluation/usage_report.md
-```
-
-- `evaluation_report.md` must cover case, row, field, and sequence accuracy, at least three additional evaluation cases created by you, failures found, and improvements made.
-- `usage_report.md` must cover the final full-dataset run, including model providers and names, model calls, input and output tokens, total and average tokens per request, and estimated total and per-request cost. Include per-model and overall totals when using multiple models.
-
-**Important:** Place `evaluation_report.md` and `usage_report.md` inside `code/evaluation/` (matching `code/evaluation/main.py` in this starter layout), write your complete evaluation metrics, custom evaluation test cases, and token/cost breakdowns directly inside those Markdown files, and keep prompts in source code or Markdown files. Automated code evaluation ignores raw data files (`.csv`, `.tsv`, `.json`, `.jsonl`, `.sql`, `.log`), so content stored only in those formats will not be visible to the code judge or AI interviewer.
-
----
-
-## Chat Transcript
-
-This repository includes [`AGENTS.md`](./AGENTS.md), which instructs compatible AI coding tools to append conversation summaries to `log.txt` in the repository root:
-
-| Platform | Path |
-| --- | --- |
-| macOS / Linux | `<repo root>/log.txt` |
-| Windows | `<repo root>\log.txt` |
-
-- Always launch your AI coding agent from the repository root (or explicitly ask it to read `./AGENTS.md` first) so every turn is logged to `log.txt` with the required `User Prompt`, `Agent Response Summary`, `Actions`, and `Context` sections.
-- Upload `log.txt` directly as your `chat_transcript` submission on HackerRank.
-- Do not include API keys, tokens, credentials, or secrets in prompts, code, configuration, or `log.txt`.
-
----
-
-## Packaging `code.zip` and Submission
-
-| Item | Description |
-| --- | --- |
-| `code.zip` | Runnable solution, prompts, configuration, `README.md`, and `evaluation/` reports |
-| `output.csv` | One answer row for each of the 518 requests in `dataset/deletion_requests.csv` |
-| `chat_transcript` | The root `log.txt` file generated by your coding agent |
-| AI interview | Live explanation of your architecture, approach, and evaluation |
-
-You may use any programming language, model, framework, or retrieval approach. Include clear setup and execution instructions in `README.md` inside `code.zip`.
-
-To package `code.zip` from the repository root without bundling the dataset:
-
-**macOS / Linux:**
+Install the one Python dependency (the Anthropic SDK):
 
 ```bash
-zip -r code.zip README.md code -x "*/__pycache__/*" "*/.venv/*" "*/venv/*" "*/node_modules/*" "*/.git/*" "*/.DS_Store"
+python3 -m venv .venv
+.venv/bin/pip install -r code/requirements.txt          # Windows: .venv\Scripts\pip install -r code\requirements.txt
 ```
 
-**Windows (PowerShell):**
+To enable Claude, put an API key in an uncommitted `.env` file at the project root. The agent reads only the environment and `.env`:
 
-```powershell
-Compress-Archive -Path README.md, code -DestinationPath code.zip -Force
+```bash
+echo 'ANTHROPIC_API_KEY=sk-ant-...' > .env
 ```
 
-When packaging `code.zip`:
+## Run
 
-- Keep your evaluation reports in `code/evaluation/` so they are bundled automatically with `code` (or add `evaluation` to the archive command above if you placed them in a top-level `evaluation/` directory).
-- Do **not** include `dataset/`, virtual environments (`.venv`, `venv`, `node_modules`), or build caches (`__pycache__`). On Windows, keep `.venv` at the repository root (outside `code/`) and remove any `code/__pycache__` folders before running `Compress-Archive`.
-- Do **not** include nested archives (`.zip`, `.tar`, `.gz`, `.tgz`, `.7z`, `.rar`) inside `code.zip` — submissions containing nested archive files will be rejected.
+All commands run from the project root.
 
-Before submitting, confirm that:
+| Command | What it does |
+|---|---|
+| `.venv/bin/python code/main.py` | Audits every request, then writes and validates `./output.csv` (518 rows) and `code/evaluation/usage_report.md` |
+| `.venv/bin/python code/main.py --offline` | Same, with no model calls: keyword intent classifier, screenshots skipped |
+| `.venv/bin/python code/main.py --refresh-llm` | Ignores the answer cache in `code/.llm_cache/` and calls Claude live |
+| `.venv/bin/python code/evaluation/main.py --write -v` | Scores the 32 samples and 5 custom scenarios, prints each mismatch, refreshes the metrics in `evaluation_report.md` |
+| `.venv/bin/python -m pytest code/tests -q` | Regression tests (custom scenarios, lifecycle scoping, replica drift, serialisation, log parsing) |
 
-- `output.csv` has the exact header `case_id,deletion_status,steps_json` and contains all 518 data rows sorted by `case_id`;
-- every `steps_json` value is a valid JSON array with consecutive step numbers starting at `1`;
-- findings cite valid evidence IDs, and `COMPLETE` verification steps cite evidence proving the current state;
-- proposed remediation and future verification steps use an empty `evidence_id` (`""`);
-- `code.zip` includes your runnable code, `README.md`, `code/evaluation/evaluation_report.md`, and `code/evaluation/usage_report.md`;
-- `log.txt` follows the `AGENTS.md` turn format and is uploaded to the `chat_transcript` slot; and
-- no API keys, credentials, real personal data, or sensitive configuration values are included.
+`python3` works in place of `.venv/bin/python` for offline runs. Only the live path needs the `anthropic` package.
+
+Every run ends with a **contract validator** that stops the run if any rule is broken:
+- exact header, every `case_id` once in order, valid enums;
+- consecutive `step_no`, phase order;
+- `NOT_APPLICABLE` ⇔ `[]`;
+- empty `evidence_id` on future steps;
+- every cited ID exists and was captured at or before that case's `audit_at`.
+
+## Approach overview
+
+```text
+dataset/ ─► ingest ─────────► Observation / Coverage ─► identity + intent ─► link to the request ─► state at audit_at ─► policy ─► plan + validate ─► output.csv
+             SQL · JSON · logs   per file, per copy        email → user_id      tier 1: exact ids       latest post-request   rules →       ordered steps,
+             TXT · PDF · PNG     (primary/replica)         Haiku: intent        tier 2: worker trail    observation per copy  treatment     cited evidence
+             (Sonnet: PNG)
+```
+
+**1. Ingest.** One parser per evidence family. Each one emits the same `Observation` record:
+- file and capture time, record time;
+- system, resource, copy (primary, read, failover, reporting or regional replica);
+- present or absent;
+- identifier tokens (email, sha256 email hash, digits-only phone, `user_id`) and whether direct PII is still visible;
+- state flags (`enabled`, `restore_allowed`).
+
+Full collection dumps also emit a `Coverage` record, so a missing resource can be proven absent. The six log layouts (key=value, syslog, JSON-lines, bracketed, pipe-delimited, nested cloud export) share one tokenizer. Their lines are joined on `trace_id`, so a lookup key reaches the line that holds the result.
+
+**2. Identity and intent.** The request email, current or historical, resolves to a `user_id` and every identifier that person ever held (`user_audit_log.csv`). Claude Haiku 5.5 classifies every distinct request text in two batched calls. Export, correction, opt-out and "don't delete" requests become `NOT_APPLICABLE`.
+
+**3. Linking.** This decides which resources belong to *this* request.
+- **Tier 1, exact identifiers:**
+  - Sources: record fields, trace-joined lookup keys and data-catalog link events.
+  - Look-alike decoy emails never match. A name alone never links.
+- **Lifecycle scoping:** some people file several requests. Each request owns the evidence captured after the previous request's `audit_at`.
+- **Tier 2, the deletion worker's trail:** this covers resources that carry no identifier, such as deleted accounts that answer 404 and fully anonymised rows. They are assigned by one global, exclusive assignment across all requests. It uses these signals:
+  - the account-delete result agrees with the reported status;
+  - the case's own downstream events fall 15–175 minutes after its account delete;
+  - shared evidence files;
+  - hints in the request text.
+
+**4. State at `audit_at`.**
+- Only files captured at or before `audit_at` are read for state or citations.
+- Observations made before the request describe the pre-deletion world. They can link a resource but cannot prove a violation.
+- The latest post-request observation of **each copy** decides, and a single surviving replica row makes the resource non-compliant.
+- Workflow statuses and results are never used as proof.
+
+**5. Policy.** `deletion_rules.csv` maps each resource's category to a treatment. The category comes from three sources, in order: the action the deletion workflow attempted, then a ledger's record type, then the system and record shape.
+
+| Treatment | Applies to | Finding → remediation → verification |
+|---|---|---|
+| Delete | profile, search entry, export, cache, marketing profile, attachment, secondary identifier | `REPORT_REMAINING_RECORD` → `DELETE_RECORD` → `VERIFY_RECORD_ABSENT` |
+| Redact | support message, email delivery log, account tombstone (keeps only the stable `user_id`) | `REPORT_EXPOSED_PII` → `REDACT_RECORD` → `VERIFY_RECORD_REDACTED` |
+| Anonymise | analytics, telemetry | `REPORT_EXPOSED_PII` → `ANONYMIZE_RECORD` → `VERIFY_RECORD_ANONYMIZED` |
+| Retain | security audit log, active legal hold | `VERIFY_RECORD_PRESENT` |
+| Block restore | backup archive | `REPORT_RESTORE_RISK` → `BLOCK_RESTORE` → `VERIFY_RESTORE_BLOCKED` |
+| Disable flow | integration / sync connector | `REPORT_ACTIVE_DATA_FLOW` → `DISABLE_DATA_FLOW` → `VERIFY_DATA_FLOW_DISABLED` |
+
+**6. Plan.**
+- Steps are ordered by phase, then the operation table (flows and restores are stopped before records change), then `system_id`, then `resource_id`.
+- Verification covers the required end state of every relevant resource, not only the remediated ones.
+- A finding cites the file that shows the violation.
+- A `COMPLETE` verification cites the file that proves the compliant state.
+
+**Why hybrid.** The grader checks exact resource IDs, evidence IDs and step order. Deterministic rules reproduce those exactly, cost nothing per case and can be tested. A per-case LLM agent would spend millions of tokens and give non-deterministic answers.
+
+The LLM calls are built to stay cheap and safe:
+- they are batched and de-duplicated;
+- strict JSON-schema output, lowest thinking setting;
+- every answer is cross-checked against the keyword classifier;
+- answers are cached by content hash;
+- a failed call is logged and skipped, never fatal.
+
+## Project layout
+
+| Path | Contents |
+|---|---|
+| `code/main.py` | Command-line entry point |
+| `code/audit/agent.py` | `DeletionAuditor`, which wires the stages together |
+| `code/audit/ingest/` | `sql.py`, `records.py` (JSON + TXT), `logs.py`, `documents.py` (PDF + screenshots), `normalize.py` |
+| `code/audit/identity.py` · `linking.py` · `state.py` · `policy.py` · `planner.py` · `output.py` | One stage each |
+| `code/audit/intent.py` · `llm/` · `prompts/` | Claude calls, cache, usage ledger, prompts (Markdown) |
+| `code/evaluation/main.py` · `custom_cases.py` | Scorer and the five scenario datasets |
+| `code/evaluation/evaluation_report.md` · `usage_report.md` | Accuracy, failures and fixes; token and cost report |
+| `code/tests/` | Regression tests |
+
+## Assumptions and known limits
+
+- Rows are sorted by numeric `case_id`, matching the input file (IDs are unpadded: `case_33` … `case_550`).
+- Files captured after `audit_at` may tell *which* resource belongs to a request. They are never used for its state or as a citation.
+- Some expected records carry no identifier in any evidence and have no activity, so they cannot be linked without guessing.
+- When several requests share a reported time slot, identifier-less resources can be indistinguishable. A deterministic tie-break decides, and the evaluation report quantifies how this affects the sample scores.
+- In the offline submission, about 12 evaluation cases that are backed only by screenshots use activity citations instead of the screenshot's state.
+
+## Packaging
+
+```bash
+zip -r code.zip README.md code -x "*/__pycache__/*" "*/.venv/*" "*/venv/*" "*/node_modules/*" "*/.git/*" "*/.DS_Store" "*/.pytest_cache/*"
+```
+
+The archive excludes `dataset/`, virtual environments, caches, nested archives, `.env` and any credentials.
